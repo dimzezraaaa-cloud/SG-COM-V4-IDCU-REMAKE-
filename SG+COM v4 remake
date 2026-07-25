@@ -1,0 +1,208 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local character
+local root
+local enabled = false
+
+local axisModel
+local renderConnection
+
+-- --- GHOST LOGIC VARIABLES ---
+local currentOffset = CFrame.new(0, 0, 0)
+local activeGhost, activeWeld = nil, nil
+local cachedRoot, cachedTorso = nil, nil
+
+-- --- GUI SETUP ---
+local gui = Instance.new("ScreenGui")
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(0, 120, 0, 40)
+button.Position = UDim2.new(0, 10, 0, 10)
+button.Text = "COM OFF"
+button.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+button.TextColor3 = Color3.new(1, 1, 1)
+button.Parent = gui
+
+-- --- CLEANUP FUNCTIONS ---
+local function destroyGhost()
+	if activeWeld then
+		activeWeld:Destroy()
+		activeWeld = nil
+	end
+	if activeGhost then
+		activeGhost:Destroy()
+		activeGhost = nil
+	end
+	cachedRoot = nil
+	cachedTorso = nil
+end
+
+local function cleanupAxis()
+	if renderConnection then
+		renderConnection:Disconnect()
+		renderConnection = nil
+	end
+	if axisModel then
+		axisModel:Destroy()
+		axisModel = nil
+	end
+end
+
+-- Completely shuts down both features
+local function disableEverything()
+	enabled = false
+	button.Text = "COM OFF"
+	cleanupAxis()
+	destroyGhost()
+end
+
+-- --- GHOST LOGIC FUNCTIONS ---
+local function calculateHeight()
+	local char = player.Character
+	if not char then return 5 end
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	local foot = char:FindFirstChild("LeftFoot") or char:FindFirstChild("LeftLeg")
+	
+	if hrp and foot then
+		return math.abs(hrp.Position.Y - foot.Position.Y)
+	end
+	return 5
+end
+
+local function deployGhostGlitch()
+	if not enabled then return end -- Only create ghost if script is enabled
+	
+	local char = player.Character
+	if not char then return end
+	
+	cachedRoot = char:FindFirstChild("HumanoidRootPart")
+	cachedTorso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+	
+	if not cachedTorso or not cachedRoot then return end
+
+	local rawCF = cachedRoot.CFrame:ToObjectSpace(cachedTorso.CFrame)
+	
+	local height = calculateHeight()
+	local multiplier = 30
+	
+	if height < 4 or height > 6 then
+		multiplier = 24 * (height / 3)
+	end
+	
+	local newPos = rawCF.Position * multiplier
+	currentOffset = CFrame.new(newPos) * rawCF.Rotation
+
+	local oldGhost = char:FindFirstChild("Skibidi_Ghost_Active")
+	if oldGhost then oldGhost:Destroy() end
+
+	local newGhost = Instance.new("Part")
+	newGhost.Name = "Skibidi_Ghost_Active"
+	newGhost.Size = Vector3.new(1, 1, 1)
+	newGhost.CFrame = cachedTorso.CFrame 
+	newGhost.Transparency = 1 
+	newGhost.CanCollide = false
+	newGhost.Parent = char
+
+	activeWeld = Instance.new("Weld")
+	activeWeld.Part0 = cachedTorso
+	activeWeld.Part1 = newGhost
+	activeWeld.C0 = currentOffset
+	activeWeld.Parent = newGhost
+
+	activeGhost = newGhost
+end
+
+-- --- CENTER OF MASS VISUALIZER ---
+local function createAxis()
+	cleanupAxis()
+
+	axisModel = Instance.new("Model")
+	axisModel.Name = "CenterOfMassVisualizer"
+	axisModel.Parent = workspace
+
+	local function makePart(size, color)
+		local p = Instance.new("Part")
+		p.Size = size
+		p.Color = color
+		p.Material = Enum.Material.Neon
+		p.Anchored = true
+		p.CanCollide = false
+		p.Parent = axisModel
+		return p
+	end
+
+	local thickness = 0.4
+	local length = 3
+
+	local x = makePart(Vector3.new(length, thickness, thickness), Color3.fromRGB(255, 0, 0))
+	local y = makePart(Vector3.new(thickness, length, thickness), Color3.fromRGB(0, 255, 0))
+	local z = makePart(Vector3.new(thickness, thickness, length), Color3.fromRGB(0, 0, 255))
+
+	renderConnection = RunService.RenderStepped:Connect(function()
+		if enabled and root then
+			local comPos = root.AssemblyCenterOfMass
+			local rootRotation = root.CFrame.Rotation
+			local baseCF = CFrame.new(comPos) * rootRotation
+
+			x.CFrame = baseCF
+			y.CFrame = baseCF
+			z.CFrame = baseCF
+		end
+	end)
+end
+
+-- --- CHARACTER INITIALIZATION ---
+local function updateCharacter(char)
+	character = char
+	root = char:WaitForChild("HumanoidRootPart")
+	
+	local humanoid = char:WaitForChild("Humanoid")
+	humanoid.Died:Connect(function()
+		disableEverything()
+	end)
+
+	if enabled then
+		task.defer(deployGhostGlitch)
+	end
+	
+	char.ChildAdded:Connect(function(child) 
+		if enabled and child:IsA("Tool") then deployGhostGlitch() end 
+	end)
+	char.ChildRemoved:Connect(function(child) 
+		if enabled and child:IsA("Tool") then deployGhostGlitch() end 
+	end)
+end
+
+player.CharacterAdded:Connect(updateCharacter)
+if player.Character then
+	updateCharacter(player.Character)
+end
+
+-- --- BUTTON TOGGLE CONTROLS ---
+button.MouseButton1Click:Connect(function()
+	enabled = not enabled
+	if enabled then
+		button.Text = "COM ON"
+		createAxis()
+		deployGhostGlitch()
+	else
+		disableEverything()
+	end
+end)
+
+-- --- HEARTBEAT LOOP (GHOST MAINTENANCE) ---
+RunService.Heartbeat:Connect(function()
+	if not enabled then return end
+
+	if activeWeld then
+		activeWeld.C0 = currentOffset
+	else
+		if player.Character and (not activeGhost or activeGhost.Parent ~= player.Character) then
+			deployGhostGlitch()
+		end
+	end
+end)
